@@ -44,7 +44,6 @@ Binaries land in `redis-${VERSION}-${OS}-${ARCH}/bin/`.
 |-------|--------|------------------------------|
 | linux | x86_64 | glibc ≥ 2.35 (Ubuntu 22.04+) |
 | linux | arm64  | glibc ≥ 2.35                 |
-| macos | x86_64 | macOS 13+                    |
 | macos | arm64  | macOS 14+                    |
 
 TLS is included via OpenSSL 3.5 (statically linked).
