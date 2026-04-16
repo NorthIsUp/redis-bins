@@ -85,8 +85,15 @@ jobs:
         working-directory: redis-src
         run: |
           set -euo pipefail
-          make -j"${{ steps.nproc.outputs.jobs }}" BUILD_TLS=yes OPENSSL_PREFIX="$GITHUB_WORKSPACE/openssl-static"
-          make PREFIX="$PWD/../dist" install
+          # Pass BUILD_TLS and OPENSSL_PREFIX on every invocation: redis's
+          # .make-settings persists CFLAGS but not OPENSSL_PREFIX, so omitting
+          # it on the install step causes a distclean+rebuild that silently
+          # fails to produce libhiredis_ssl.a.
+          make -j"${{ steps.nproc.outputs.jobs }}" \
+            BUILD_TLS=yes \
+            OPENSSL_PREFIX="$GITHUB_WORKSPACE/openssl-static" \
+            PREFIX="$PWD/../dist" \
+            install
 
       - name: Verify portability (Linux)
         if: matrix.os == 'linux'
