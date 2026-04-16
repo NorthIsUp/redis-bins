@@ -16,6 +16,9 @@ on:
 permissions:
   contents: write
 
+env:
+  OPENSSL_VERSION: 3.5.6
+
 jobs:
   build:
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
@@ -41,11 +44,38 @@ jobs:
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential libssl-dev pkg-config ca-certificates curl
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config ca-certificates curl
 
       - name: Install build deps (macOS)
         if: matrix.os == 'macos'
-        run: brew install openssl@3 pkg-config
+        run: brew install pkg-config
+
+      - name: Detect parallelism
+        id: nproc
+        run: |
+          if [ "${{ matrix.os }}" = "macos" ]; then
+            echo "jobs=$(sysctl -n hw.ncpu)" >> "$GITHUB_OUTPUT"
+          else
+            echo "jobs=$(nproc)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache static OpenSSL
+        id: openssl-cache
+        uses: actions/cache@v4
+        with:
+          path: openssl-static
+          key: openssl-${{ env.OPENSSL_VERSION }}-${{ matrix.runner }}
+
+      - name: Build static OpenSSL
+        if: steps.openssl-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz" -o openssl.tar.gz
+          tar xzf openssl.tar.gz
+          cd "openssl-${OPENSSL_VERSION}"
+          ./Configure no-shared no-tests no-docs no-apps --prefix="$GITHUB_WORKSPACE/openssl-static" --libdir=lib
+          make -j"${{ steps.nproc.outputs.jobs }}"
+          make install_sw
 
       - name: Fetch redis ${{ inputs.redis_version }}
         run: |
@@ -58,15 +88,42 @@ jobs:
         working-directory: redis-src
         run: |
           set -euo pipefail
-          if [ "${{ matrix.os }}" = "macos" ]; then
-            openssl_prefix="$(brew --prefix openssl@3)"
-            export PKG_CONFIG_PATH="$openssl_prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-            jobs="$(sysctl -n hw.ncpu)"
-          else
-            jobs="$(nproc)"
-          fi
-          make -j"$jobs" BUILD_TLS=yes
+          make -j"${{ steps.nproc.outputs.jobs }}" BUILD_TLS=yes OPENSSL_PREFIX="$GITHUB_WORKSPACE/openssl-static"
           make PREFIX="$PWD/../dist" install
+
+      - name: Verify portability (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          set -euo pipefail
+          fail=0
+          for bin in dist/bin/redis-server dist/bin/redis-cli dist/bin/redis-benchmark dist/bin/redis-check-aof dist/bin/redis-check-rdb; do
+            [ -x "$bin" ] || continue
+            echo "=== $bin ==="
+            ldd "$bin"
+            if ldd "$bin" | grep -iE "libssl|libcrypto"; then
+              echo "FAIL: $bin dynamically links OpenSSL"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Verify portability (macOS)
+        if: matrix.os == 'macos'
+        run: |
+          set -euo pipefail
+          fail=0
+          for bin in dist/bin/redis-server dist/bin/redis-cli dist/bin/redis-benchmark dist/bin/redis-check-aof dist/bin/redis-check-rdb; do
+            [ -x "$bin" ] || continue
+            echo "=== $bin ==="
+            otool -L "$bin"
+            bad=$(otool -L "$bin" | tail -n +2 | awk '{print $1}' | grep -vE '^(/usr/lib/|/System/)' || true)
+            if [ -n "$bad" ]; then
+              echo "FAIL: $bin references non-system libs:"
+              echo "$bad"
+              fail=1
+            fi
+          done
+          exit $fail
 
       - name: Package binaries
         run: |
