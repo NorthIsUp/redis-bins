@@ -1,0 +1,121 @@
+name: Build Redis Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      redis_version:
+        description: 'Redis version to build (e.g. 7.4.1)'
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      redis_version:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            os: linux
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            os: linux
+            arch: arm64
+          - runner: macos-13
+            os: macos
+            arch: x86_64
+          - runner: macos-14
+            os: macos
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Install build deps (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential libssl-dev pkg-config ca-certificates curl
+
+      - name: Install build deps (macOS)
+        if: matrix.os == 'macos'
+        run: brew install openssl@3 pkg-config
+
+      - name: Fetch redis ${{ inputs.redis_version }}
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/redis/redis/archive/refs/tags/${{ inputs.redis_version }}.tar.gz" -o redis.tar.gz
+          tar xzf redis.tar.gz
+          mv "redis-${{ inputs.redis_version }}" redis-src
+
+      - name: Build redis
+        working-directory: redis-src
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.os }}" = "macos" ]; then
+            openssl_prefix="$(brew --prefix openssl@3)"
+            export PKG_CONFIG_PATH="$openssl_prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+            jobs="$(sysctl -n hw.ncpu)"
+          else
+            jobs="$(nproc)"
+          fi
+          make -j"$jobs" BUILD_TLS=yes
+          make PREFIX="$PWD/../dist" install
+
+      - name: Package binaries
+        run: |
+          set -euo pipefail
+          name="redis-${{ inputs.redis_version }}-${{ matrix.os }}-${{ matrix.arch }}"
+          mv dist "$name"
+          tar czf "$name.tar.gz" "$name"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          else
+            shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: redis-${{ inputs.redis_version }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            redis-${{ inputs.redis_version }}-*.tar.gz
+            redis-${{ inputs.redis_version }}-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.redis_version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$VERSION" --repo "$REPO" --clobber artifacts/*
+          else
+            gh release create "$VERSION" \
+              --repo "$REPO" \
+              --title "Redis $VERSION" \
+              --notes "Redis $VERSION binaries built from https://github.com/redis/redis/releases/tag/$VERSION" \
+              artifacts/*
+          fi
