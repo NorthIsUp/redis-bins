@@ -1,5 +1,10 @@
 # redis-bins
 
+[![Build Redis Release](https://github.com/NorthIsUp/redis-bins/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/NorthIsUp/redis-bins/actions/workflows/build-release.yml)
+[![Nightly Redis Release Check](https://github.com/NorthIsUp/redis-bins/actions/workflows/nightly-check.yml/badge.svg?branch=main)](https://github.com/NorthIsUp/redis-bins/actions/workflows/nightly-check.yml)
+[![Latest release](https://img.shields.io/github/v/release/NorthIsUp/redis-bins?label=release)](https://github.com/NorthIsUp/redis-bins/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/NorthIsUp/redis-bins/total.svg)](https://github.com/NorthIsUp/redis-bins/releases)
+
 Pre-compiled [Redis](https://github.com/redis/redis) binaries for Linux and macOS (x86_64 and arm64). OpenSSL is statically linked, so the binaries are self-contained — no Homebrew, no `libssl` version skew.
 
 Releases track upstream `redis/redis` stable tags. A nightly cron checks for new releases and kicks off a build automatically.
